@@ -16,23 +16,17 @@ const PORT = process.env.PORT || process.env.SOCKET_PORT || 3001;
 
 const httpServer = createServer();
 
-const allowedOrigins = (
-  process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000,http://localhost:3002'
-)
-  .split(',')
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+const allowedOrigins = [
+  'https://sketchduel.netlify.app',
+  'http://localhost:3000',
+  'http://localhost:3002',
+];
 
 const io = new Server(httpServer, {
   cors: {
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error(`CORS blocked origin: ${origin}`));
-      }
-    },
+    origin: allowedOrigins,
     methods: ['GET', 'POST'],
+    credentials: true,
   },
 });
 
