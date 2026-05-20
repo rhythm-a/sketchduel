@@ -170,6 +170,6 @@ io.on('connection', (socket) => {
   });
 });
 
-httpServer.listen(PORT, () => {
+httpServer.listen(PORT, "0.0.0.0", () => {
   console.log(`[server] Socket.IO listening on port ${PORT}`);
 });
