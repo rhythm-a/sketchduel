@@ -12,7 +12,7 @@ import {
 } from './game.js';
 import { fetchRoomScores } from './supabase-sync.js';
 
-const PORT = process.env.SOCKET_PORT || 3001;
+const PORT = process.env.PORT || process.env.SOCKET_PORT || 3001;
 
 const httpServer = createServer();
 
