@@ -6,6 +6,11 @@ export interface GameState {
   timeLeft: number;
   wordHint: string;
   round: number;
+  settings: {
+    roundSeconds: number;
+    maxPlayers: number;
+    wordPacks: string[];
+  };
 }
 
 export interface ChatMessage {

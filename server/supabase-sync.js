@@ -13,6 +13,8 @@ export function getSupabaseAdmin() {
   return clientCache;
 }
 
+// ── Scores ────────────────────────────────────────────────────────────────────
+
 export async function fetchRoomScores(roomId) {
   const client = getSupabaseAdmin();
   if (!client) return [];
@@ -46,4 +48,42 @@ export function persistRoomScores(roomId, players) {
     .then(({ error }) => {
       if (error) console.error('[supabase] persistRoomScores', error.message);
     });
+}
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+
+/**
+ * Persist room settings when the host creates a room.
+ * Uses upsert so re-connects by the same host don't error.
+ */
+export async function persistRoomSettings(roomId, settings) {
+  const client = getSupabaseAdmin();
+  if (!client) return;
+
+  const { error } = await client
+    .from('room_settings')
+    .upsert({ room_id: roomId, settings }, { onConflict: 'room_id' });
+
+  if (error) console.error('[supabase] persistRoomSettings', error.message);
+}
+
+/**
+ * Fetch persisted settings for a room.
+ * Returns null when Supabase is not configured or the row doesn't exist yet.
+ */
+export async function fetchRoomSettings(roomId) {
+  const client = getSupabaseAdmin();
+  if (!client) return null;
+
+  const { data, error } = await client
+    .from('room_settings')
+    .select('settings')
+    .eq('room_id', roomId)
+    .maybeSingle();
+
+  if (error) {
+    console.error('[supabase] fetchRoomSettings', error.message);
+    return null;
+  }
+  return data?.settings ?? null;
 }

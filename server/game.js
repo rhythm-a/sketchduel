@@ -1,9 +1,15 @@
-import { pickWord } from './words.js';
+import { pickWord, buildWordPool } from './words.js';
 import { persistRoomScores } from './supabase-sync.js';
 
 export const ROUND_SECONDS = 80;
 const GUESS_POINTS = 100;
 const DRAWER_POINTS = 50;
+
+export const DEFAULT_SETTINGS = {
+  roundSeconds: 80,
+  maxPlayers: 8,
+  wordPacks: [], // extra packs on top of 'basic'
+};
 
 export const createRoomGame = () => ({
   active: false,
@@ -34,12 +40,18 @@ export const getPlayersPayload = (room) =>
 
 export const getPublicGameState = (room) => {
   const g = room.game;
+  const settings = room.settings ?? DEFAULT_SETTINGS;
   return {
-    status: g.active ? 'playing' : room.players.size >= 2 ? 'waiting' : 'waiting',
+    status: g.active ? 'playing' : 'waiting',
     drawerId: g.drawerId,
     timeLeft: g.timeLeft,
     wordHint: g.word ? wordHint(g.word) : '',
     round: g.round,
+    settings: {
+      roundSeconds: settings.roundSeconds,
+      maxPlayers: settings.maxPlayers,
+      wordPacks: settings.wordPacks,
+    },
   };
 };
 
@@ -49,9 +61,7 @@ export const addChat = (room, message) => {
     ...message,
   };
   room.game.chat.push(entry);
-  if (room.game.chat.length > 80) {
-    room.game.chat.shift();
-  }
+  if (room.game.chat.length > 80) room.game.chat.shift();
   return entry;
 };
 
@@ -106,14 +116,15 @@ export const endRound = (io, roomId, room, reason) => {
   io.to(roomId).emit('clear_canvas');
 
   setTimeout(() => {
-    if (room.players.size >= 2) {
-      startRound(io, roomId, room);
-    }
+    if (room.players.size >= 2) startRound(io, roomId, room);
   }, 3000);
 };
 
 export const startRound = (io, roomId, room) => {
   if (room.players.size < 2) return;
+
+  const settings = room.settings ?? DEFAULT_SETTINGS;
+  const wordPool = buildWordPool(settings.wordPacks);
 
   clearRoundTimer(room);
   room.game.guessed.clear();
@@ -133,12 +144,12 @@ export const startRound = (io, roomId, room) => {
   const drawerId = room.game.turnOrder[room.game.turnIndex];
   room.game.turnIndex = (room.game.turnIndex + 1) % room.game.turnOrder.length;
 
-  const word = pickWord(room.game.usedWords);
+  const word = pickWord(room.game.usedWords, wordPool);
   room.game.usedWords.add(word);
   room.game.word = word;
   room.game.drawerId = drawerId;
   room.game.active = true;
-  room.game.timeLeft = ROUND_SECONDS;
+  room.game.timeLeft = settings.roundSeconds;
 
   const drawer = room.players.get(drawerId);
   const entry = addChat(room, {
@@ -154,7 +165,6 @@ export const startRound = (io, roomId, room) => {
   room.game.timer = setInterval(() => {
     room.game.timeLeft -= 1;
     io.to(roomId).emit('game_state', getPublicGameState(room));
-
     if (room.game.timeLeft <= 0) {
       endRound(io, roomId, room, "Time's up!");
     }
@@ -202,9 +212,7 @@ export const handleGuess = (io, roomId, room, playerId, text) => {
     player.score = (player.score ?? 0) + GUESS_POINTS;
 
     const drawer = room.players.get(g.drawerId);
-    if (drawer) {
-      drawer.score = (drawer.score ?? 0) + DRAWER_POINTS;
-    }
+    if (drawer) drawer.score = (drawer.score ?? 0) + DRAWER_POINTS;
 
     const entry = addChat(room, {
       playerId,
@@ -231,9 +239,7 @@ export const handleGuess = (io, roomId, room, playerId, text) => {
 
 const socketEmitToPlayer = (io, room, playerId, event, data) => {
   const player = room.players.get(playerId);
-  if (player?.socketId) {
-    io.to(player.socketId).emit(event, data);
-  }
+  if (player?.socketId) io.to(player.socketId).emit(event, data);
 };
 
 export const syncPlayerJoin = (io, socket, roomId, room) => {
