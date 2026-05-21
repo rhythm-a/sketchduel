@@ -1,1 +1,1 @@
-self.__NEXT_FONT_MANIFEST="{\"pages\":{},\"app\":{},\"appUsingSizeAdjust\":false,\"pagesUsingSizeAdjust\":false}"
+self.__NEXT_FONT_MANIFEST="{\"pages\":{},\"app\":{\"/home/nxtgen-frontend/Downloads/project-bolt-sb1-jzs9btks/project/app/layout\":[\"static/media/13971731025ec697-s.p.woff2\",\"static/media/bca7023bf625e650-s.p.woff2\"]},\"appUsingSizeAdjust\":true,\"pagesUsingSizeAdjust\":false}"

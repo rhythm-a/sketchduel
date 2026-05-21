@@ -20,10 +20,11 @@ import { getSocket } from '@/lib/socket';
 import { drawLine, clearCanvas, getCanvasPoint, type DrawStroke } from '@/lib/canvas';
 import type { ChatMessage, GameState } from '@/lib/game';
 import { getSupabaseBrowser } from '@/lib/supabase/client';
+import { avatarData } from '@/lib/avatars';
 
 type DrawTool = 'pencil' | 'eraser' | 'fill';
 
-// Flood fill algorithm
+// ── Flood fill ─────────────────────────────────────────────────────────────────
 function floodFill(
   ctx: CanvasRenderingContext2D,
   startX: number,
@@ -33,9 +34,7 @@ function floodFill(
 ) {
   const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const data = imgData.data;
-
   const toIndex = (x: number, y: number) => (y * canvas.width + x) * 4;
-
   const sx = Math.round(startX);
   const sy = Math.round(startY);
   const startIdx = toIndex(sx, sy);
@@ -43,46 +42,33 @@ function floodFill(
   const startG = data[startIdx + 1];
   const startB = data[startIdx + 2];
   const startA = data[startIdx + 3];
-
   const bigint = parseInt(fillColorHex.slice(1), 16);
   const fillR = (bigint >> 16) & 255;
   const fillG = (bigint >> 8) & 255;
   const fillB = bigint & 255;
   const fillA = 255;
-
   if (startR === fillR && startG === fillG && startB === fillB && startA === fillA) return;
-
   const matchesStart = (idx: number) =>
     Math.abs(data[idx] - startR) < 30 &&
     Math.abs(data[idx + 1] - startG) < 30 &&
     Math.abs(data[idx + 2] - startB) < 30 &&
     Math.abs(data[idx + 3] - startA) < 30;
-
   const stack: number[] = [sx + sy * canvas.width];
   const visited = new Uint8Array(canvas.width * canvas.height);
-
   while (stack.length > 0) {
     const pos = stack.pop()!;
     if (visited[pos]) continue;
     visited[pos] = 1;
-
     const x = pos % canvas.width;
     const y = Math.floor(pos / canvas.width);
     const idx = pos * 4;
-
     if (!matchesStart(idx)) continue;
-
-    data[idx] = fillR;
-    data[idx + 1] = fillG;
-    data[idx + 2] = fillB;
-    data[idx + 3] = fillA;
-
+    data[idx] = fillR; data[idx + 1] = fillG; data[idx + 2] = fillB; data[idx + 3] = fillA;
     if (x > 0) stack.push(pos - 1);
     if (x < canvas.width - 1) stack.push(pos + 1);
     if (y > 0) stack.push(pos - canvas.width);
     if (y < canvas.height - 1) stack.push(pos + canvas.width);
   }
-
   ctx.putImageData(imgData, 0, 0);
 }
 
@@ -91,20 +77,41 @@ const PACK_LABELS: Record<string, string> = {
   tech: 'Technology', nature: 'Nature', popculture: 'Pop Culture',
 };
 
+// Quick preset color swatches for the drawing toolbar
+const COLOR_SWATCHES = [
+  '#000000', '#ffffff', '#ef4444', '#f97316',
+  '#fbbf24', '#4ade80', '#3b82f6', '#a855f7',
+  '#ec4899', '#6b7280', '#92400e', '#0ea5e9',
+];
+
+// ── Avatar inline component ────────────────────────────────────────────────────
+function Avatar({ playerId, size = 28 }: { playerId: string; size?: number }) {
+  const { bg, svgInner } = avatarData(playerId, size);
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={size}
+      height={size}
+      viewBox="0 0 88 88"
+      style={{ flexShrink: 0, borderRadius: '50%' }}
+    >
+      <circle cx="44" cy="44" r="44" fill={bg} />
+      <g dangerouslySetInnerHTML={{ __html: svgInner }} />
+    </svg>
+  );
+}
+
 export default function RoomPage() {
   const router = useRouter();
   const { id } = useParams<{ id: string }>();
   const { playerId, nickname, setRoomId, setPlayers, players } = useGameStore();
 
-  // Settings are written to sessionStorage by the home page when creating a room.
-  // We read them once on mount — no searchParams dependency, no re-render loop.
   const creatorSettingsRef = useRef<object | null>(null);
   if (creatorSettingsRef.current === null && typeof window !== 'undefined' && id) {
     try {
       const raw = sessionStorage.getItem(`room_settings_${id}`);
       if (raw) {
         creatorSettingsRef.current = JSON.parse(raw);
-        // Clean up so the key doesn't linger across sessions
         sessionStorage.removeItem(`room_settings_${id}`);
       }
     } catch { /* ignore */ }
@@ -119,7 +126,6 @@ export default function RoomPage() {
   const [drawerWord, setDrawerWord] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [guess, setGuess] = useState('');
-
   const [mobileTab, setMobileTab] = useState<'chat' | 'scores'>('chat');
 
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -133,8 +139,15 @@ export default function RoomPage() {
   const lastX = useRef(0);
   const lastY = useRef(0);
 
-  // Stable join callback — only depends on primitive id/playerId/nickname, plus
-  // the ref (which never changes identity). No creatorSettings in the dep array.
+  // Timer color: Ink Purple → Banana Yellow → Orange → Tomato Red as time runs low
+  const timerColor = (() => {
+    const t = gameState?.timeLeft ?? 999;
+    if (t <= 10) return '#FF6B57';   // Tomato red
+    if (t <= 20) return '#FF9F43';   // Orange
+    if (t <= 30) return '#FFD84D';   // Banana yellow
+    return '#3B3155';                 // Ink purple
+  })();
+
   const joinRoom = useCallback(() => {
     if (!id || !nickname) return;
     getSocket().emit('join_room', {
@@ -153,7 +166,6 @@ export default function RoomPage() {
 
   useEffect(() => {
     if (!id || !nickname) { router.push('/'); return; }
-
     setRoomId(id);
     const socket = getSocket();
     const markHydrated = () => setHydratedFromServer(true);
@@ -352,72 +364,84 @@ export default function RoomPage() {
 
   return (
     <main
-      className="fixed inset-0 bg-[#0f0f0f] text-white flex flex-col overflow-hidden"
-      style={{ height: '100dvh' }}
+      className="fixed inset-0 bg-[#FFF7E8] text-[#3B3155] flex flex-col overflow-hidden"
+      style={{ height: '100dvh', fontFamily: 'var(--font-dm-sans, sans-serif)' }}
     >
+      {/* Alert banner */}
       {socketMessage && (
-        <div role="alert" className="flex items-center gap-2 px-4 py-2 bg-amber-950 border-b border-amber-800/60 text-amber-200 text-xs shrink-0">
-          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-          <span className="flex-1 min-w-0">{socketMessage}</span>
-          <button onClick={() => setSocketMessage(null)} className="text-amber-400 hover:text-white ml-2 shrink-0">✕</button>
+        <div role="alert" className="flex items-center gap-2 px-4 py-3 bg-[#FF6B57] border-b-2 border-[#FF6B57]/60 text-white text-sm shrink-0 shadow-sm">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span className="flex-1 min-w-0 font-medium">{socketMessage}</span>
+          <button onClick={() => setSocketMessage(null)} className="text-white/80 hover:text-white ml-2 shrink-0 font-bold text-lg">✕</button>
         </div>
       )}
 
-      <header className="flex items-center justify-between gap-3 px-3 h-12 border-b border-[#1e1e1e] shrink-0 bg-[#141414]">
+      {/* Header */}
+      <header className="flex items-center justify-between gap-3 px-4 h-14 border-b-2 border-[#E5DFD0] shrink-0 bg-white shadow-sm">
         <button
           onClick={handleLeaveRoom}
-          className="flex items-center gap-1.5 text-[#666] hover:text-white transition-colors text-sm px-2 py-1.5 rounded hover:bg-[#1e1e1e]"
+          className="flex items-center gap-2 text-[#9B6BFF] hover:text-[#FF5FA2] transition-colors text-sm px-3 py-2 rounded-lg hover:bg-[#FFF7E8] font-semibold"
         >
           <ArrowLeft className="w-4 h-4" />
           <span className="hidden sm:inline">Leave</span>
         </button>
 
+        {/* Room code pill */}
         <button
           onClick={handleCopyCode}
-          className="flex items-center gap-2 font-mono text-sm tracking-widest text-[#4f8ef7] hover:text-white transition-colors bg-[#1a2540] hover:bg-[#1e2d4d] px-3 py-1.5 rounded"
+          className="flex items-center gap-2 font-mono text-sm tracking-[0.2em] text-[#FF5FA2] hover:text-[#3B3155] transition-colors bg-[#FF5FA2]/10 hover:bg-[#FF5FA2]/20 px-4 py-2 rounded-lg border-2 border-[#FF5FA2]/30 font-bold shadow-sm"
         >
           {id}
-          {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5 text-[#4f8ef7]" />}
+          {copied
+            ? <Check className="w-4 h-4 text-[#71E36A]" />
+            : <Copy className="w-4 h-4 opacity-60" />
+          }
         </button>
 
-        <div className="flex items-center gap-3 text-[#555] text-xs shrink-0">
+        {/* Right side: status + timer + players */}
+        <div className="flex items-center gap-4 text-sm shrink-0">
           {connectionLabel === 'reconnecting' && (
-            <span className="flex items-center gap-1 text-amber-400">
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            <span className="flex items-center gap-2 text-[#FF9F43] font-semibold">
+              <Loader2 className="w-4 h-4 animate-spin" />
               <span className="hidden sm:inline">Reconnecting</span>
             </span>
           )}
           {connectionLabel === 'error' && (
-            <span className="flex items-center gap-1 text-red-400">
-              <WifiOff className="w-3.5 h-3.5" />
+            <span className="text-[#FF6B57]">
+              <WifiOff className="w-4 h-4" />
             </span>
           )}
-          {gameState?.status === 'playing' && connectionLabel === 'live' && (
-            <span className="font-mono text-amber-400 font-bold tabular-nums w-8 text-right">
-              {gameState.timeLeft}s
+          {isPlaying && connectionLabel === 'live' && (
+            <span
+              className="font-mono font-black tabular-nums min-w-[3.5rem] text-right text-lg transition-colors"
+              style={{ color: timerColor }}
+            >
+              {gameState?.timeLeft}s
             </span>
           )}
-          <span className="flex items-center gap-1">
-            <Users className="w-3.5 h-3.5" />
-            <span className="font-semibold text-white">{players.length}</span>
+          <span className="flex items-center gap-2 text-[#9B6BFF]">
+            <Users className="w-4 h-4" />
+            <span className="font-bold text-[#3B3155]">{players.length}</span>
           </span>
         </div>
       </header>
 
+      {/* Body */}
       <div className="flex-1 flex flex-col lg:flex-row min-h-0 relative">
 
+        {/* Blocking overlay */}
         {blockingOverlay && (
-          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-[#0f0f0f]/90 backdrop-blur-sm">
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-[#FFF7E8]/95 backdrop-blur-sm">
             {connectionLabel === 'error' ? (
               <>
-                <WifiOff className="w-8 h-8 text-red-400" />
-                <p className="text-[#999] text-sm">Could not reach game server.</p>
-                <code className="text-xs text-[#666] bg-[#1a1a1a] px-3 py-1.5 rounded">npm run server</code>
+                <WifiOff className="w-10 h-10 text-[#FF6B57]" />
+                <p className="text-[#9B6BFF] text-base font-semibold">Could not reach game server.</p>
+                <code className="text-sm text-[#C4B8A0] bg-white px-4 py-2 rounded-lg border-2 border-[#E5DFD0] font-mono">npm run server</code>
               </>
             ) : (
               <>
-                <Loader2 className="w-7 h-7 text-[#4f8ef7] animate-spin" />
-                <p className="text-[#666] text-sm">
+                <Loader2 className="w-8 h-8 text-[#FF5FA2] animate-spin" />
+                <p className="text-[#9B6BFF] text-base font-semibold">
                   {connectionLabel === 'reconnecting' ? 'Reconnecting…' : 'Joining room…'}
                 </p>
               </>
@@ -425,34 +449,48 @@ export default function RoomPage() {
           </div>
         )}
 
+        {/* ── Canvas side ── */}
         <div className="flex-1 flex flex-col min-h-0 min-w-0">
-          <div className="flex items-center gap-1 sm:gap-2 px-3 py-2 border-b border-[#1e1e1e] bg-[#141414] shrink-0 flex-wrap">
+
+          {/* Toolbar */}
+          <div className="flex items-center gap-2 px-4 py-3 border-b-2 border-[#E5DFD0] bg-white shrink-0 flex-wrap shadow-sm">
+
+            {/* Game status label */}
             {isPlaying && (
-              <div className="flex items-center mr-2 shrink-0">
+              <div className="flex items-center mr-3 shrink-0">
                 {isDrawer ? (
-                  <span className="text-xs font-semibold">
-                    Draw: <span className="text-green-400 font-black uppercase tracking-wide">{drawerWord}</span>
+                  <span className="flex items-center gap-2 text-sm font-semibold">
+                    <span className="text-[#9B6BFF]">Draw:</span>
+                    <span
+                      className="px-3 py-1 rounded-full text-white font-black uppercase tracking-wide text-sm shadow-sm"
+                      style={{ background: '#FF5FA2', fontFamily: 'var(--font-fredoka, sans-serif)' }}
+                    >
+                      {drawerWord}
+                    </span>
                   </span>
                 ) : (
-                  <span className="text-xs text-[#888]">
-                    Guess: <span className="font-mono tracking-[0.15em] text-white font-bold">{gameState?.wordHint}</span>
+                  <span className="text-sm text-[#9B6BFF] flex items-center gap-2 font-medium">
+                    <span>Guess:</span>
+                    <span className="font-mono tracking-[0.2em] text-[#3B3155] font-bold text-base">{gameState?.wordHint}</span>
                   </span>
                 )}
               </div>
             )}
+
+            {/* Waiting message */}
             {!isPlaying && players.length < 2 && (
-              <div className="flex items-center gap-3 mr-2 flex-wrap">
-                <span className="text-xs text-[#555]">Need 2+ players to start</span>
+              <div className="flex items-center gap-2 mr-3 flex-wrap">
+                <span className="text-sm text-[#C4B8A0] font-medium">Need 2+ players to start</span>
                 {gameState?.settings && (
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-[10px] bg-[#1a1a1a] text-[#666] px-2 py-0.5 rounded font-mono">
+                    <span className="text-xs bg-[#FFD84D]/20 text-[#3B3155] px-2 py-1 rounded-md border border-[#FFD84D]/40 font-mono font-semibold">
                       {gameState.settings.roundSeconds}s
                     </span>
-                    <span className="text-[10px] bg-[#1a1a1a] text-[#666] px-2 py-0.5 rounded font-mono">
+                    <span className="text-xs bg-[#57C7FF]/20 text-[#3B3155] px-2 py-1 rounded-md border border-[#57C7FF]/40 font-mono font-semibold">
                       {gameState.settings.maxPlayers} max
                     </span>
                     {gameState.settings.wordPacks?.map((p: string) => (
-                      <span key={p} className="text-[10px] bg-[#1a2540] text-[#4f8ef7] px-2 py-0.5 rounded">
+                      <span key={p} className="text-xs bg-[#5EE6B5]/20 text-[#3B3155] px-2 py-1 rounded-md border border-[#5EE6B5]/40 font-semibold">
                         {PACK_LABELS[p] ?? p}
                       </span>
                     ))}
@@ -461,70 +499,96 @@ export default function RoomPage() {
               </div>
             )}
 
-            <div className={`flex items-center gap-1 sm:gap-2 ${canDraw ? '' : 'opacity-30 pointer-events-none'}`}>
-              <div className="flex items-center bg-[#1a1a1a] rounded-md p-0.5 gap-0.5">
+            {/* Drawing tools */}
+            <div className={`flex items-center gap-2 ${canDraw ? '' : 'opacity-30 pointer-events-none'}`}>
+
+              {/* Tool buttons */}
+              <div className="flex items-center bg-[#FFF7E8] rounded-lg p-1 gap-1 border-2 border-[#E5DFD0]">
                 <button
                   onClick={() => setTool('pencil')}
                   title="Pencil"
-                  className={`p-1.5 rounded transition-colors ${tool === 'pencil' ? 'bg-[#4f8ef7] text-white' : 'text-[#666] hover:text-white hover:bg-[#252525]'}`}
+                  className={`p-2 rounded-md transition-all ${tool === 'pencil' ? 'bg-[#57C7FF] text-white shadow-sm' : 'text-[#9B6BFF] hover:text-[#3B3155] hover:bg-white'}`}
                 >
                   <Pencil className="w-4 h-4" />
                 </button>
                 <button
                   onClick={() => setTool('eraser')}
                   title="Eraser"
-                  className={`p-1.5 rounded transition-colors ${tool === 'eraser' ? 'bg-[#4f8ef7] text-white' : 'text-[#666] hover:text-white hover:bg-[#252525]'}`}
+                  className={`p-2 rounded-md transition-all ${tool === 'eraser' ? 'bg-[#57C7FF] text-white shadow-sm' : 'text-[#9B6BFF] hover:text-[#3B3155] hover:bg-white'}`}
                 >
                   <Eraser className="w-4 h-4" />
                 </button>
                 <button
                   onClick={() => setTool('fill')}
                   title="Fill bucket"
-                  className={`p-1.5 rounded transition-colors ${tool === 'fill' ? 'bg-[#4f8ef7] text-white' : 'text-[#666] hover:text-white hover:bg-[#252525]'}`}
+                  className={`p-2 rounded-md transition-all ${tool === 'fill' ? 'bg-[#57C7FF] text-white shadow-sm' : 'text-[#9B6BFF] hover:text-[#3B3155] hover:bg-white'}`}
                 >
                   <PaintBucket className="w-4 h-4" />
                 </button>
               </div>
 
-              <label
-                title="Color"
-                className="relative w-8 h-8 rounded cursor-pointer border-2 border-[#2a2a2a] hover:border-[#4f8ef7] transition-colors overflow-hidden shrink-0"
-                style={{ backgroundColor: color }}
-              >
-                <input
-                  type="color"
-                  value={color}
-                  onChange={(e) => setColor(e.target.value)}
-                  className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                />
-              </label>
+              {/* Color swatches */}
+              <div className="flex items-center gap-1.5 flex-wrap max-w-[140px] sm:max-w-none">
+                {COLOR_SWATCHES.map((c) => (
+                  <button
+                    key={c}
+                    onClick={() => { setColor(c); setTool('pencil'); }}
+                    title={c}
+                    className="w-6 h-6 rounded-full border-2 transition-all hover:scale-110 shadow-sm"
+                    style={{
+                      backgroundColor: c,
+                      borderColor: color === c && tool !== 'eraser' ? '#FF5FA2' : '#E5DFD0',
+                      outline: color === c && tool !== 'eraser' ? '2px solid #FF5FA2' : 'none',
+                      outlineOffset: '2px',
+                    }}
+                  />
+                ))}
+                {/* Custom color picker */}
+                <label
+                  title="Custom color"
+                  className="relative w-6 h-6 rounded-full cursor-pointer border-2 border-[#E5DFD0] overflow-hidden transition-all hover:scale-110 shadow-sm"
+                  style={{
+                    background: 'conic-gradient(red, yellow, lime, cyan, blue, magenta, red)',
+                  }}
+                >
+                  <input
+                    type="color"
+                    value={color}
+                    onChange={(e) => { setColor(e.target.value); setTool('pencil'); }}
+                    className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                  />
+                </label>
+              </div>
 
+              {/* Size slider */}
               {tool !== 'fill' && (
-                <div className="flex items-center gap-1.5 min-w-0">
+                <div className="hidden sm:flex items-center gap-2">
                   <input
                     type="range"
                     min="1"
                     max="30"
                     value={size}
                     onChange={(e) => setSize(Number(e.target.value))}
-                    className="w-16 sm:w-24 accent-[#4f8ef7]"
+                    className="w-24 accent-[#FF5FA2]"
                   />
-                  <span className="text-[#555] text-xs w-7 tabular-nums">{size}px</span>
+                  <span className="text-[#9B6BFF] text-xs w-8 tabular-nums font-semibold">{size}px</span>
                 </div>
               )}
 
+              {/* Clear button */}
               <button
                 onClick={handleClearClick}
                 title="Clear canvas"
-                className="flex items-center gap-1.5 text-[#666] hover:text-red-400 transition-colors px-2 py-1.5 rounded hover:bg-[#1e1e1e] text-xs font-medium ml-1"
+                className="flex items-center gap-1.5 text-[#9B6BFF] hover:text-[#FF6B57] transition-colors px-3 py-2 rounded-lg hover:bg-[#FF6B57]/10 text-sm font-semibold"
               >
-                <Trash2 className="w-3.5 h-3.5" />
+                <Trash2 className="w-4 h-4" />
                 <span className="hidden sm:inline">Clear</span>
               </button>
             </div>
           </div>
 
-          <div className="flex-1 flex items-center justify-center bg-[#181818] overflow-hidden relative">
+          {/* Canvas */}
+          <div className="flex-1 flex items-center justify-center bg-[#FFF7E8] overflow-hidden relative p-4">
             <canvas
               ref={canvasRef}
               width={1200}
@@ -535,83 +599,115 @@ export default function RoomPage() {
               onPointerCancel={handlePointerUpOrLeave}
               onPointerLeave={handlePointerUpOrLeave}
               style={{ touchAction: 'none', userSelect: 'none' }}
-              className={`bg-white shadow-2xl max-w-full max-h-full w-auto h-auto object-contain select-none ${toolCursor}`}
+              className={`bg-white shadow-lg max-w-full max-h-full w-auto h-auto object-contain select-none rounded-lg ${toolCursor}`}
             />
           </div>
         </div>
 
+        {/* ── Sidebar: scoreboard + chat ── */}
         <div
-          className="w-full lg:w-64 xl:w-72 flex flex-col bg-[#141414] border-t lg:border-t-0 lg:border-l border-[#1e1e1e] shrink-0 overflow-hidden"
+          className="w-full lg:w-72 xl:w-80 flex flex-col bg-white border-t-2 lg:border-t-0 lg:border-l-2 border-[#E5DFD0] shrink-0 overflow-hidden shadow-sm"
           style={{ height: '44vh', minHeight: '180px' }}
         >
-          <div className="flex lg:hidden border-b border-[#1e1e1e] shrink-0">
+          {/* Mobile tabs */}
+          <div className="flex lg:hidden border-b-2 border-[#E5DFD0] shrink-0 bg-[#FFFCF5]">
             <button
               onClick={() => setMobileTab('chat')}
-              className={`flex-1 py-2 text-xs font-semibold transition-colors ${mobileTab === 'chat' ? 'text-white border-b-2 border-[#4f8ef7]' : 'text-[#555]'}`}
+              className={`flex-1 py-3 text-sm font-bold transition-colors ${mobileTab === 'chat' ? 'text-[#FF5FA2] border-b-2 border-[#FF5FA2]' : 'text-[#9B6BFF]'}`}
             >
               Guesses
             </button>
             <button
               onClick={() => setMobileTab('scores')}
-              className={`flex-1 py-2 text-xs font-semibold transition-colors ${mobileTab === 'scores' ? 'text-white border-b-2 border-[#4f8ef7]' : 'text-[#555]'}`}
+              className={`flex-1 py-3 text-sm font-bold transition-colors ${mobileTab === 'scores' ? 'text-[#FF5FA2] border-b-2 border-[#FF5FA2]' : 'text-[#9B6BFF]'}`}
             >
               Scores
             </button>
           </div>
 
-          <div className={`${mobileTab === 'scores' ? 'flex' : 'hidden'} lg:flex flex-col shrink-0 p-3 border-b border-[#1e1e1e] max-h-[40%] lg:max-h-44 overflow-hidden`}>
-            <h3 className="text-[10px] text-[#444] uppercase tracking-widest font-bold mb-2">Scoreboard</h3>
-            <div className="overflow-y-auto space-y-1 flex-1">
+          {/* Scoreboard */}
+          <div className={`${mobileTab === 'scores' ? 'flex' : 'hidden'} lg:flex flex-col shrink-0 p-4 border-b-2 border-[#E5DFD0] max-h-[40%] lg:max-h-48 overflow-hidden bg-[#FFFCF5]`}>
+            <h3
+              className="text-xs text-[#9B6BFF] uppercase tracking-wider font-bold mb-3"
+              style={{ fontFamily: 'var(--font-fredoka, sans-serif)' }}
+            >
+              Scoreboard
+            </h3>
+            <div className="overflow-y-auto space-y-2 flex-1">
               {sortedPlayers.length === 0 ? (
-                <p className="text-[#444] text-xs">Waiting for players…</p>
+                <p className="text-[#C4B8A0] text-sm">Waiting for players…</p>
               ) : (
-                sortedPlayers.map((player, i) => (
-                  <div
-                    key={player.id}
-                    className={`flex items-center justify-between px-2.5 py-1.5 rounded text-xs ${gameState?.drawerId === player.id
-                      ? 'bg-amber-950/50 ring-1 ring-amber-700/50'
-                      : 'bg-[#1a1a1a]'
-                      }`}
-                  >
-                    <span className="truncate text-[#ccc] pr-2 flex items-center gap-1.5">
-                      <span className="text-[#444] w-3 tabular-nums">{i + 1}</span>
-                      {player.nickname}
-                      {playerId === player.id && <span className="text-[#555] text-[10px]">(you)</span>}
-                    </span>
-                    <span className="font-bold text-[#4f8ef7] tabular-nums shrink-0">{player.score ?? 0}</span>
-                  </div>
-                ))
+                sortedPlayers.map((player, i) => {
+                  const isCurrentDrawer = gameState?.drawerId === player.id;
+                  const isMe = playerId === player.id;
+                  return (
+                    <div
+                      key={player.id}
+                      className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all ${isCurrentDrawer
+                        ? 'bg-[#FFD84D]/20 border-2 border-[#FFD84D]/50'
+                        : 'bg-white border-2 border-[#E5DFD0]'
+                        }`}
+                    >
+                      {/* Rank */}
+                      <span className="text-[#C4B8A0] w-4 tabular-nums shrink-0 text-xs font-bold">{i + 1}</span>
+
+                      {/* Avatar */}
+                      <Avatar playerId={player.id} size={28} />
+
+                      {/* Name */}
+                      <span className="truncate text-[#3B3155] flex-1 min-w-0 flex items-center gap-1.5 font-semibold">
+                        {player.nickname}
+                        {isMe && <span className="text-[#9B6BFF] text-xs shrink-0">(you)</span>}
+                        {isCurrentDrawer && <span className="text-xs text-[#FFD84D] shrink-0 font-normal">drawing</span>}
+                      </span>
+
+                      {/* Score */}
+                      <span className="font-black text-[#71E36A] tabular-nums shrink-0 text-base">
+                        {player.score ?? 0}
+                      </span>
+                    </div>
+                  );
+                })
               )}
             </div>
           </div>
 
-          <div className={`${mobileTab === 'chat' ? 'flex' : 'hidden'} lg:flex flex-col flex-1 min-h-0 p-3`}>
-            <h3 className="text-[10px] text-[#444] uppercase tracking-widest font-bold mb-2 shrink-0">Guesses</h3>
-            <div className="flex-1 overflow-y-auto space-y-1.5 text-xs min-h-0 mb-2">
+          {/* Chat / guesses */}
+          <div className={`${mobileTab === 'chat' ? 'flex' : 'hidden'} lg:flex flex-col flex-1 min-h-0 p-4`}>
+            <h3
+              className="text-xs text-[#9B6BFF] uppercase tracking-wider font-bold mb-3 shrink-0"
+              style={{ fontFamily: 'var(--font-fredoka, sans-serif)' }}
+            >
+              Guesses
+            </h3>
+            <div className="flex-1 overflow-y-auto space-y-2 text-sm min-h-0 mb-3">
               {chatMessages.length === 0 ? (
-                <p className="text-[#333]">No guesses yet.</p>
+                <p className="text-[#C4B8A0]">No guesses yet.</p>
               ) : (
                 chatMessages.map((msg) => (
                   <div
                     key={msg.id}
                     className={
                       msg.type === 'system'
-                        ? 'text-[#444] italic'
+                        ? 'text-[#C4B8A0] italic text-xs'
                         : msg.correct
-                          ? 'text-green-400 font-semibold'
-                          : 'text-[#888]'
+                          ? 'flex items-center gap-2 bg-[#71E36A]/15 px-3 py-2 rounded-lg border-2 border-[#71E36A]/30'
+                          : 'text-[#9B6BFF]'
                     }
                   >
-                    <span className={`font-semibold ${msg.correct ? 'text-green-300' : 'text-[#666]'}`}>
+                    {msg.correct && <span className="text-[#71E36A] text-lg leading-none">✓</span>}
+                    <span className={`font-bold ${msg.correct ? 'text-[#3B3155]' : msg.type === 'system' ? 'text-[#C4B8A0]' : 'text-[#9B6BFF]'}`}>
                       {msg.nickname}:{' '}
                     </span>
-                    {msg.text}
+                    <span className={msg.correct ? 'text-[#3B3155]' : ''}>{msg.text}</span>
                   </div>
                 ))
               )}
               <div ref={chatEndRef} />
             </div>
-            <form onSubmit={handleSubmitGuess} className="flex gap-1.5 shrink-0">
+
+            {/* Guess input */}
+            <form onSubmit={handleSubmitGuess} className="flex gap-2 shrink-0">
               <input
                 type="text"
                 value={guess}
@@ -622,14 +718,14 @@ export default function RoomPage() {
                 autoComplete="off"
                 inputMode="text"
                 enterKeyHint="send"
-                className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-[#1a1a1a] border border-[#2a2a2a] focus:border-[#4f8ef7] text-white text-xs placeholder:text-[#333] disabled:opacity-40 focus:outline-none transition-colors"
+                className="flex-1 min-w-0 px-3 py-2.5 rounded-lg bg-white border-2 border-[#E5DFD0] focus:border-[#57C7FF] text-[#3B3155] text-sm placeholder:text-[#C4B8A0] disabled:opacity-40 focus:outline-none transition-all shadow-sm"
               />
               <button
                 type="submit"
                 disabled={!isPlaying || isDrawer || !guess.trim() || connectionLabel !== 'live'}
-                className="px-3 py-2 bg-[#4f8ef7] hover:bg-[#3a7de6] disabled:opacity-30 rounded-lg text-xs font-bold shrink-0 transition-colors"
+                className="px-4 py-2.5 bg-[#57C7FF] hover:bg-[#FF5FA2] disabled:opacity-30 rounded-lg text-sm font-bold shrink-0 transition-all active:scale-[0.97] text-white shadow-sm"
               >
-                Send
+                →
               </button>
             </form>
           </div>
